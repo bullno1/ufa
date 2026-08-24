@@ -4,7 +4,7 @@
 /**
  * Universal File Action
  *
- * A native file open and save dialog that works on even web.
+ * A native file open and save dialog that even works on web.
  *
  * On most platforms, the dialog and file I/O is handled by SDL:
  *
