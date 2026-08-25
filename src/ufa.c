@@ -96,6 +96,23 @@ ufa_begin_open_file(ufa_config_t config) {
 	return (ufa_open_file_t*)ufa;
 }
 
+ufa_open_file_t*
+ufa_begin_reopen_file(ufa_config_t config, const char* path) {
+	SDL_IOStream* stream = SDL_IOFromFile(path, "r");
+	if (stream == NULL) { return NULL; }
+
+	ufa_t* ufa = config.memalign(config.arena, sizeof(ufa_t), _Alignof(ufa_t));
+	*ufa = (ufa_t){
+		.arena = config.arena,
+		.memalign = config.memalign,
+		.mode = "r",
+		.stream = stream,
+		.status = UFA_OK,
+	};
+
+	return (ufa_open_file_t*)ufa;
+}
+
 ufa_status_t
 ufa_check_open_file(ufa_open_file_t* open_file) {
 	return ((ufa_t*)open_file)->status;
@@ -280,6 +297,11 @@ ufa_begin_open_file(ufa_config_t config) {
 	ufa->handle = ufa_web_begin_open_file(filter, ufa, &ufa->filename, &ufa->status);
 
 	return (ufa_open_file_t*)ufa;
+}
+
+ufa_open_file_t*
+ufa_begin_reopen_file(ufa_config_t config, const char* path) {
+	return NULL;
 }
 
 ufa_status_t

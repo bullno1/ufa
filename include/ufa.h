@@ -140,6 +140,15 @@ ufa_open_file_t*
 ufa_begin_open_file(ufa_config_t config);
 
 /**
+ * Reopen a previously opened file
+ *
+ * @param path Path to the file, must be returned by @ref ufa_get_open_file_name
+ * @return An open file. Should be passed to @ref ufa_end_open_file when done
+ */
+ufa_open_file_t*
+ufa_begin_reopen_file(ufa_config_t config, const char* path);
+
+/**
  * Check the status of an open file action
  */
 ufa_status_t
