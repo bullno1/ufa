@@ -84,31 +84,18 @@ ufa_begin_open_file(ufa_config_t config) {
 		.mode = "r",
 	};
 
-	SDL_ShowOpenFileDialog(
-		ufa_file_callback, ufa,
-		config.parent_window,
-		(const SDL_DialogFileFilter*)config.filters,
-		config.num_filters,
-		config.directory,
-		false
-	);
-
-	return (ufa_open_file_t*)ufa;
-}
-
-ufa_open_file_t*
-ufa_begin_reopen_file(ufa_config_t config, const char* path) {
-	SDL_IOStream* stream = SDL_IOFromFile(path, "r");
-	if (stream == NULL) { return NULL; }
-
-	ufa_t* ufa = config.memalign(config.arena, sizeof(ufa_t), _Alignof(ufa_t));
-	*ufa = (ufa_t){
-		.arena = config.arena,
-		.memalign = config.memalign,
-		.mode = "r",
-		.stream = stream,
-		.status = UFA_OK,
-	};
+	if (config.filename != NULL) {
+		ufa_open_file(ufa, config.filename);
+	} else {
+		SDL_ShowOpenFileDialog(
+			ufa_file_callback, ufa,
+			config.parent_window,
+			(const SDL_DialogFileFilter*)config.filters,
+			config.num_filters,
+			config.directory,
+			false
+		);
+	}
 
 	return (ufa_open_file_t*)ufa;
 }

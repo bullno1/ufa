@@ -108,9 +108,10 @@ typedef struct {
 	int num_filters;
 
 	/**
-	 * The suggested initial filename
+	 * If set, open the file for reading or writing without a dialog.
 	 *
-	 * This can be `NULL` to let the OS pick a default.
+	 * This is not supported on all platforms.
+	 * On the web, it would only work for @ref ufa_begin_save_file
 	 */
 	const char* filename;
 
@@ -138,15 +139,6 @@ typedef struct {
  */
 ufa_open_file_t*
 ufa_begin_open_file(ufa_config_t config);
-
-/**
- * Reopen a previously opened file
- *
- * @param path Path to the file, must be returned by @ref ufa_get_open_file_name
- * @return An open file. Should be passed to @ref ufa_end_open_file when done
- */
-ufa_open_file_t*
-ufa_begin_reopen_file(ufa_config_t config, const char* path);
 
 /**
  * Check the status of an open file action
