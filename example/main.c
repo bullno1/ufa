@@ -73,6 +73,8 @@ app_make_ufa_config(app_t* app) {
 		.parent_window = app->window,
 		.filters = FILTERS,
 		.num_filters = sizeof(FILTERS) / sizeof(FILTERS[0]),
+		// Only used by ufa_begin_save_file
+		.suggested_name = "hello.txt",
 	};
 }
 

@@ -107,6 +107,18 @@ addToLibrary({
 			}
 		};
 
+		_ufa_web_get_default_name = (alloc_ctx) => {
+			let name = (document.title || '')
+				.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+				.trim();
+			if (name === '') { name = 'ufa'; }
+
+			const nameLen = lengthBytesUTF8(name) + 1;
+			const nameBuf = _ufa_web_malloc(alloc_ctx, nameLen);
+			stringToUTF8(name, nameBuf, nameLen);
+			return nameBuf;
+		};
+
 		_ufa_web_begin_save_file = (filename) => {
 			return allocHandle({
 				filename: UTF8ToString(filename),
@@ -154,6 +166,9 @@ addToLibrary({
 
 	ufa_web_read_open_file: () => {},
 	ufa_web_read_open_file__deps: ['$ufa_init'],
+
+	ufa_web_get_default_name: () => {},
+	ufa_web_get_default_name__deps: ['$ufa_init'],
 
 	ufa_web_begin_save_file: () => {},
 	ufa_web_begin_save_file__deps: ['$ufa_init'],

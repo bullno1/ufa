@@ -121,6 +121,21 @@ typedef struct {
 	 * This can be `NULL` to let the OS pick a default.
 	 */
 	const char* directory;
+
+	/**
+	 * The suggested file name for @ref ufa_begin_save_file
+	 *
+	 * Unlike @ref ufa_config_t::filename, this does not bypass the dialog.
+	 * On native platforms, the save dialog starts with this name prefilled.
+	 * On the web, this is used as the download name.
+	 *
+	 * If the name does not end with the extension of the chosen filter, the
+	 * extension will be appended.
+	 *
+	 * This can be `NULL`.
+	 * On the web, a name will be derived from the page title instead.
+	 */
+	const char* suggested_name;
 } ufa_config_t;
 
 /**
