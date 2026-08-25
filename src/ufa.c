@@ -68,10 +68,26 @@ typedef struct {
 	const ufa_filter_t* filters;
 	int num_filters;
 	const char* filename;
+	const char* error;
 	ufa_status_t status;
 	SDL_IOStream* stream;
 	const char* mode;
 } ufa_t;
+
+/**
+ * Snapshot SDL_GetError into the arena.
+ *
+ * SDL's error buffer is overwritten by subsequent SDL calls so it cannot be
+ * returned directly.
+ */
+static void
+ufa_set_error(ufa_t* ufa) {
+	const char* error = SDL_GetError();
+	size_t len = strlen(error);
+	char* copy = ufa->memalign(ufa->arena, len + 1, _Alignof(char));
+	memcpy(copy, error, len + 1);
+	ufa->error = copy;
+}
 
 static void
 ufa_open_file(ufa_t* ufa, const char* filename) {
@@ -81,7 +97,12 @@ ufa_open_file(ufa_t* ufa, const char* filename) {
 	ufa->filename = filename_copy;
 
 	ufa->stream = SDL_IOFromFile(filename, ufa->mode);
-	ufa->status = ufa->stream != NULL ? UFA_OK : UFA_ERROR;
+	if (ufa->stream != NULL) {
+		ufa->status = UFA_OK;
+	} else {
+		ufa_set_error(ufa);
+		ufa->status = UFA_ERROR;
+	}
 }
 
 static void SDLCALL
@@ -89,6 +110,7 @@ ufa_file_callback(void* userdata, const char* const* filelist, int filter) {
 	ufa_t* ufa = userdata;
 
 	if (filelist == NULL) {
+		ufa_set_error(ufa);
 		ufa->status = UFA_ERROR;
 	} else if (*filelist == NULL) {
 		ufa->status = UFA_CANCELLED;
@@ -153,7 +175,7 @@ ufa_check_open_file(ufa_open_file_t* open_file) {
 
 const char*
 ufa_get_open_file_error(ufa_open_file_t* open_file) {
-	return SDL_GetError();
+	return ((ufa_t*)open_file)->error;
 }
 
 const char*
@@ -165,13 +187,19 @@ ufa_status_t
 ufa_read_open_file(ufa_open_file_t* open_file, void* buf, size_t* size) {
 	ufa_t* ufa = (ufa_t*)open_file;
 	if (ufa->stream == NULL) {
+		ufa->error = "The file is not open";
 		*size = 0;
 		return UFA_ERROR;
 	}
 
 	*size = SDL_ReadIO(ufa->stream, buf, *size);
 	SDL_IOStatus status = SDL_GetIOStatus(ufa->stream);
-	return status == SDL_IO_STATUS_READY || status == SDL_IO_STATUS_EOF ? UFA_OK : UFA_ERROR;
+	if (status == SDL_IO_STATUS_READY || status == SDL_IO_STATUS_EOF) {
+		return UFA_OK;
+	} else {
+		ufa_set_error(ufa);
+		return UFA_ERROR;
+	}
 }
 
 void
@@ -235,7 +263,7 @@ ufa_check_save_file(ufa_save_file_t* save_file) {
 
 const char*
 ufa_get_save_file_error(ufa_save_file_t* save_file) {
-	return SDL_GetError();
+	return ((ufa_t*)save_file)->error;
 }
 
 const char*
@@ -247,13 +275,19 @@ ufa_status_t
 ufa_write_save_file(ufa_save_file_t* save_file, const void* buf, size_t* size) {
 	ufa_t* ufa = (ufa_t*)save_file;
 	if (ufa->stream == NULL) {
+		ufa->error = "The file is not open";
 		*size = 0;
 		return UFA_ERROR;
 	}
 
 	*size = SDL_WriteIO(ufa->stream, buf, *size);
 	SDL_IOStatus status = SDL_GetIOStatus(ufa->stream);
-	return status == SDL_IO_STATUS_READY || status == SDL_IO_STATUS_EOF ? UFA_OK : UFA_ERROR;
+	if (status == SDL_IO_STATUS_READY || status == SDL_IO_STATUS_EOF) {
+		return UFA_OK;
+	} else {
+		ufa_set_error(ufa);
+		return UFA_ERROR;
+	}
 }
 
 void
@@ -282,6 +316,7 @@ typedef struct {
 	void* (*memalign)(ufa_arena_t* arena, size_t size, size_t alignment);
 
 	const char* filename;
+	const char* error;
 	uint8_t status;
 	int handle;
 } ufa_t;
@@ -344,7 +379,8 @@ ufa_web_begin_open_file(
 	const char* filter,
 	void* alloc_ctx,
 	const char** filename_ptr,
-	uint8_t* status_ptr
+	uint8_t* status_ptr,
+	const char** error_ptr
 );
 
 extern void
@@ -367,7 +403,8 @@ ufa_begin_open_file(ufa_config_t config) {
 		ufa_web_build_accept(&config),
 		ufa,
 		&ufa->filename,
-		&ufa->status
+		&ufa->status,
+		&ufa->error
 	);
 
 	return (ufa_open_file_t*)ufa;
@@ -380,7 +417,7 @@ ufa_check_open_file(ufa_open_file_t* open_file) {
 
 const char*
 ufa_get_open_file_error(ufa_open_file_t* open_file) {
-	return NULL;
+	return ((ufa_t*)open_file)->error;
 }
 
 const char*
@@ -409,7 +446,8 @@ ufa_web_begin_save_file(
 	int show_dialog,
 	void* alloc_ctx,
 	const char** filename_ptr,
-	uint8_t* status_ptr
+	uint8_t* status_ptr,
+	const char** error_ptr
 );
 
 extern const char*
@@ -462,7 +500,8 @@ ufa_begin_save_file(ufa_config_t config) {
 		config.filename == NULL,
 		ufa,
 		&ufa->filename,
-		&ufa->status
+		&ufa->status,
+		&ufa->error
 	);
 
 	return (ufa_save_file_t*)ufa;
@@ -475,7 +514,7 @@ ufa_check_save_file(ufa_save_file_t* save_file) {
 
 const char*
 ufa_get_save_file_error(ufa_save_file_t* save_file) {
-	return NULL;
+	return ((ufa_t*)save_file)->error;
 }
 
 const char*

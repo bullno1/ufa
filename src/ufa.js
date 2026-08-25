@@ -23,13 +23,26 @@ addToLibrary({
 		const UFA_CANCELLED = 2;
 		const UFA_ERROR = 3;
 
-		_ufa_web_begin_open_file = (filter, alloc_ctx, filename_ptr, status_ptr) => {
+		function allocString(alloc_ctx, str) {
+			const len = lengthBytesUTF8(str) + 1;
+			const buf = _ufa_web_malloc(alloc_ctx, len);
+			stringToUTF8(str, buf, len);
+			return buf;
+		}
+
+		function reportError(obj, e) {
+			console.error(e);
+			setValue(obj.error_ptr, allocString(obj.alloc_ctx, String(e)), '*');
+		}
+
+		_ufa_web_begin_open_file = (filter, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
 			const input = document.createElement('input');
 			input.type = 'file';
 
 			const obj = {
 				input,
 				alloc_ctx,
+				error_ptr,
 				content: null,
 				pos: 0,
 			};
@@ -37,16 +50,13 @@ addToLibrary({
 			function openSuccess(file) {
 				obj.file = file;
 
-				const nameLen = lengthBytesUTF8(file.name) + 1;
-				const nameBuf = _ufa_web_malloc(alloc_ctx, nameLen);
-				stringToUTF8(file.name, nameBuf, nameLen);
-				setValue(filename_ptr, nameBuf, '*');
+				setValue(filename_ptr, allocString(alloc_ctx, file.name), '*');
 
 				file.arrayBuffer().then((buf) => {
 					obj.content = new Uint8Array(buf);
 					setValue(status_ptr, UFA_OK, 'i8');
 				}).catch((e) => {
-					console.error(e);
+					reportError(obj, e);
 					setValue(status_ptr, UFA_ERROR, 'i8');
 				})
 			}
@@ -79,9 +89,10 @@ addToLibrary({
 		};
 
 		_ufa_web_read_open_file = (handle, buf, size_ptr) => {
+			const file = resolveHandle(handle);
 			try {
-				const file = resolveHandle(handle);
 				if (!file || !file.content) {
+					if (file) { reportError(file, new Error('The file is not ready for reading')); }
 					HEAPU32[size_ptr >> 2] = 0;
 					return UFA_ERROR;
 				}
@@ -102,7 +113,7 @@ addToLibrary({
 				HEAPU32[size_ptr >> 2] = bytesToRead;
 				return UFA_OK;
 			} catch (e) {
-				console.error(e);
+				if (file) { reportError(file, e); } else { console.error(e); }
 				return UFA_ERROR;
 			}
 		};
@@ -113,15 +124,14 @@ addToLibrary({
 				.trim();
 			if (name === '') { name = 'ufa'; }
 
-			const nameLen = lengthBytesUTF8(name) + 1;
-			const nameBuf = _ufa_web_malloc(alloc_ctx, nameLen);
-			stringToUTF8(name, nameBuf, nameLen);
-			return nameBuf;
+			return allocString(alloc_ctx, name);
 		};
 
-		_ufa_web_begin_save_file = (filename, accept, show_dialog, alloc_ctx, filename_ptr, status_ptr) => {
+		_ufa_web_begin_save_file = (filename, accept, show_dialog, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
 			const obj = {
 				filename: UTF8ToString(filename),
+				alloc_ctx,
+				error_ptr,
 				mode: null,
 				chunks: [],
 				writable: null,
@@ -151,14 +161,11 @@ addToLibrary({
 
 						// Report the name the user actually chose
 						obj.filename = handle.name;
-						const nameLen = lengthBytesUTF8(handle.name) + 1;
-						const nameBuf = _ufa_web_malloc(alloc_ctx, nameLen);
-						stringToUTF8(handle.name, nameBuf, nameLen);
-						setValue(filename_ptr, nameBuf, '*');
+						setValue(filename_ptr, allocString(alloc_ctx, handle.name), '*');
 
 						setValue(status_ptr, UFA_OK, 'i8');
 					}).catch((e) => {
-						console.error(e);
+						reportError(obj, e);
 						setValue(status_ptr, UFA_ERROR, 'i8');
 					}),
 					(e) => {
@@ -203,8 +210,8 @@ addToLibrary({
 		};
 
 		_ufa_web_write_save_file = function(handle, buf, size_ptr) {
+			const file = resolveHandle(handle);
 			try {
-				const file = resolveHandle(handle);
 				if (!file || file.error) { return UFA_ERROR; }
 
 				const bytesToWrite = HEAPU32[size_ptr >> 2];
@@ -215,7 +222,7 @@ addToLibrary({
 					file.pending = file.pending
 						.then(() => file.writable.write(chunk))
 						.catch((e) => {
-							console.error(e);
+							reportError(file, e);
 							file.error = e;
 						});
 				} else {
@@ -223,7 +230,7 @@ addToLibrary({
 				}
 				return UFA_OK;
 			} catch (e) {
-				console.error(e);
+				if (file) { reportError(file, e); } else { console.error(e); }
 				return UFA_ERROR;
 			}
 		};

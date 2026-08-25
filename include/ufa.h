@@ -171,7 +171,8 @@ ufa_check_open_file(ufa_open_file_t* open_file);
  * Get the error during the open file action.
  *
  * If any function returns @ref UFA_ERROR, the reason can be retrieved here.
- * The returned string remains valid until the next `ufa_` function is called.
+ * A `NULL` return means there is no error.
+ * The returned string remains valid until the arena is reset.
  */
 const char*
 ufa_get_open_file_error(ufa_open_file_t* open_file);
@@ -252,7 +253,8 @@ ufa_check_save_file(ufa_save_file_t* save_file);
  * Get the error during the save file action.
  *
  * If any function returns @ref UFA_ERROR, the reason can be retrieved here.
- * The returned string remains valid until the next `ufa_` function is called.
+ * A `NULL` return means there is no error.
+ * The returned string remains valid until the arena is reset.
  */
 const char*
 ufa_get_save_file_error(ufa_save_file_t* save_file);
