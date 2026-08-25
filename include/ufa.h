@@ -15,9 +15,15 @@
  * Due to platform restriction, this is approximated:
  *
  * * Opening a file is shown as a file upload dialog.
- * * Saving simply triggers a file download.
+ * * Saving uses the File System Access API (`showSaveFilePicker`) where the
+ *   browser supports it, which shows a real save dialog and streams writes
+ *   to disk.
+ *   In other browsers, it falls back to triggering a file download.
  *
- * As of this writing, the web filesystem API is not yet widely available.
+ * For the save dialog to be used, @ref ufa_begin_save_file must be called
+ * during a user gesture (e.g: from a mouse or keyboard event handler) in a
+ * secure context (https).
+ * Otherwise, the download fallback is used.
  */
 
 #include <stddef.h>
@@ -221,6 +227,13 @@ ufa_end_open_file(ufa_open_file_t* open_file);
  *
  * @param config Config this save action
  * @return A handle to the save file action
+ *
+ * @remark On the web, call this during a user gesture (e.g: from a mouse or
+ *   keyboard event handler) so that the browser's save dialog can be used
+ *   where supported.
+ *   Outside of a user gesture, or in browsers without the File System Access
+ *   API, the save silently falls back to a file download named after
+ *   @ref ufa_config_t::suggested_name.
  *
  * @see ufa_check_save_file
  * @see ufa_write_save_file

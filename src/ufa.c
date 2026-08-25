@@ -292,6 +292,49 @@ ufa_web_malloc(void* ctx, size_t size) {
 	return ufa->memalign(ufa->arena, size, _Alignof(max_align_t));
 }
 
+/**
+ * Build a comma separated list of extensions (".png,.jpg") from the filters.
+ *
+ * This is the format of the `accept` attribute of `<input type="file">`.
+ * Multi-extension patterns ("png;jpg") are split into separate entries.
+ * Wildcards are dropped.
+ * Returns an empty string if no concrete extension remains.
+ */
+static const char*
+ufa_web_build_accept(const ufa_config_t* config) {
+	// Worst case per pattern: every token gains a ",." prefix
+	size_t cap = 1;
+	for (int i = 0; i < config->num_filters; ++i) {
+		const char* pattern = config->filters[i].pattern;
+		if (pattern != NULL) { cap += strlen(pattern) * 2 + 2; }
+	}
+
+	char* accept = config->memalign(config->arena, cap, _Alignof(char));
+	char* itr = accept;
+	bool is_first = true;
+	for (int i = 0; i < config->num_filters; ++i) {
+		const char* pattern = config->filters[i].pattern;
+		if (pattern == NULL) { continue; }
+
+		while (*pattern != '\0') {
+			size_t len = strcspn(pattern, ";");
+			if (len > 0 && !(len == 1 && pattern[0] == '*')) {
+				if (!is_first) { *itr++ = ','; }
+				*itr++ = '.';
+				memcpy(itr, pattern, len);
+				itr += len;
+				is_first = false;
+			}
+
+			pattern += len;
+			if (*pattern == ';') { ++pattern; }
+		}
+	}
+	*itr = '\0';
+
+	return accept;
+}
+
 // }}}
 
 // Open {{{
@@ -320,36 +363,14 @@ ufa_begin_open_file(ufa_config_t config) {
 		.status = UFA_PENDING,
 	};
 
-	int len = 0;
-	bool is_first = true;
-	for (int i = 0; i < config.num_filters; ++i) {
-		if (strcmp(config.filters[i].pattern, "*") == 0) { continue; }
-
-		len += snprintf(NULL, 0, "%s.%s", is_first ? "" : ",", config.filters[i].pattern);
-		is_first = false;
-	}
-
-	size_t buf_size = len + 1;
-	char* filter = config.memalign(config.arena, buf_size, _Alignof(char));
-	char* buf_itr = filter;
-	is_first = true;
-	for (int i = 0; i < config.num_filters; ++i) {
-		if (strcmp(config.filters[i].pattern, "*") == 0) { continue; }
-
-		int part_len = snprintf(buf_itr, buf_size, "%s.%s", is_first ? "" : ",", config.filters[i].pattern);
-		buf_size -= part_len;
-		buf_itr += part_len;
-		is_first = false;
-	}
-
-	ufa->handle = ufa_web_begin_open_file(filter, ufa, &ufa->filename, &ufa->status);
+	ufa->handle = ufa_web_begin_open_file(
+		ufa_web_build_accept(&config),
+		ufa,
+		&ufa->filename,
+		&ufa->status
+	);
 
 	return (ufa_open_file_t*)ufa;
-}
-
-ufa_open_file_t*
-ufa_begin_reopen_file(ufa_config_t config, const char* path) {
-	return NULL;
 }
 
 ufa_status_t
@@ -382,7 +403,14 @@ ufa_end_open_file(ufa_open_file_t* open_file) {
 // Save {{{
 
 extern int
-ufa_web_begin_save_file(const char* filename);
+ufa_web_begin_save_file(
+	const char* filename,
+	const char* accept,
+	int show_dialog,
+	void* alloc_ctx,
+	const char** filename_ptr,
+	uint8_t* status_ptr
+);
 
 extern const char*
 ufa_web_get_default_name(void* alloc_ctx);
@@ -399,7 +427,7 @@ ufa_begin_save_file(ufa_config_t config) {
 	*ufa = (ufa_t){
 		.arena = config.arena,
 		.memalign = config.memalign,
-		.status = UFA_OK,
+		.status = UFA_PENDING,
 		.filename = config.filename,
 	};
 
@@ -422,7 +450,20 @@ ufa_begin_save_file(ufa_config_t config) {
 		ufa->filename = base;
 	}
 
-	ufa->handle = ufa_web_begin_save_file(ufa->filename);
+	// With an explicit filename, the dialog is bypassed and the save is always
+	// a plain download.
+	// Otherwise, JS will use the save dialog where the browser supports it,
+	// updating status and filename asynchronously like the open path.
+	// On the download fallback, status is set to UFA_OK before this call
+	// returns.
+	ufa->handle = ufa_web_begin_save_file(
+		ufa->filename,
+		ufa_web_build_accept(&config),
+		config.filename == NULL,
+		ufa,
+		&ufa->filename,
+		&ufa->status
+	);
 
 	return (ufa_save_file_t*)ufa;
 }

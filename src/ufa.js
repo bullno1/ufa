@@ -119,37 +119,108 @@ addToLibrary({
 			return nameBuf;
 		};
 
-		_ufa_web_begin_save_file = (filename) => {
-			return allocHandle({
+		_ufa_web_begin_save_file = (filename, accept, show_dialog, alloc_ctx, filename_ptr, status_ptr) => {
+			const obj = {
 				filename: UTF8ToString(filename),
+				mode: null,
 				chunks: [],
-			});
+				writable: null,
+				pending: null,
+				error: null,
+			};
+
+			function startDownload() {
+				obj.mode = 'download';
+				setValue(status_ptr, UFA_OK, 'i8');
+			}
+
+			if (show_dialog && window.showSaveFilePicker) {
+				const options = { suggestedName: obj.filename };
+				const extensions = UTF8ToString(accept);
+				if (extensions !== '') {
+					options.types = [{
+						accept: { 'application/octet-stream': extensions.split(',') },
+					}];
+				}
+
+				window.showSaveFilePicker(options).then(
+					(handle) => handle.createWritable().then((writable) => {
+						obj.mode = 'picker';
+						obj.writable = writable;
+						obj.pending = Promise.resolve();
+
+						// Report the name the user actually chose
+						obj.filename = handle.name;
+						const nameLen = lengthBytesUTF8(handle.name) + 1;
+						const nameBuf = _ufa_web_malloc(alloc_ctx, nameLen);
+						stringToUTF8(handle.name, nameBuf, nameLen);
+						setValue(filename_ptr, nameBuf, '*');
+
+						setValue(status_ptr, UFA_OK, 'i8');
+					}).catch((e) => {
+						console.error(e);
+						setValue(status_ptr, UFA_ERROR, 'i8');
+					}),
+					(e) => {
+						if (e.name === 'AbortError') {
+							setValue(status_ptr, UFA_CANCELLED, 'i8');
+						} else {
+							// e.g: SecurityError when called outside of a user
+							// gesture or in a cross-origin iframe
+							console.error(e);
+							startDownload();
+						}
+					}
+				);
+			} else {
+				startDownload();
+			}
+
+			return allocHandle(obj);
 		};
 
 		_ufa_web_end_save_file = (handle) => {
 			const file = resolveHandle(handle);
 			if (!file) { return; }
 
-			const blob = new Blob(file.chunks, { type: 'application/octet-stream' });
-			const url = URL.createObjectURL(blob);
+			if (file.writable) {
+				file.pending
+					.then(() => file.writable.close())
+					.catch((e) => { console.error(e); });
+			} else if (file.mode === 'download') {
+				const blob = new Blob(file.chunks, { type: 'application/octet-stream' });
+				const url = URL.createObjectURL(blob);
 
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = file.filename;
-			a.click();
+				const a = document.createElement('a');
+				a.href = url;
+				a.download = file.filename;
+				a.click();
 
-			URL.revokeObjectURL(url);
+				URL.revokeObjectURL(url);
+			}
+
 			closeHandle(handle);
 		};
 
 		_ufa_web_write_save_file = function(handle, buf, size_ptr) {
 			try {
 				const file = resolveHandle(handle);
-				if (!file) { return UFA_ERROR; }
+				if (!file || file.error) { return UFA_ERROR; }
 
 				const bytesToWrite = HEAPU32[size_ptr >> 2];
 				const chunk = HEAPU8.slice(buf, buf + bytesToWrite);
-				file.chunks.push(chunk);
+				if (file.writable) {
+					// The stream serializes writes; a failure surfaces on the
+					// next call
+					file.pending = file.pending
+						.then(() => file.writable.write(chunk))
+						.catch((e) => {
+							console.error(e);
+							file.error = e;
+						});
+				} else {
+					file.chunks.push(chunk);
+				}
 				return UFA_OK;
 			} catch (e) {
 				console.error(e);
