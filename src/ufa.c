@@ -519,7 +519,10 @@ ufa_begin_save_file(ufa_config_t config) {
 	};
 
 	if (config.file_ref != NULL) {
-		ufa->filename = config.file_ref->name;
+		size_t name_len = strlen(config.file_ref->name);
+		char* name_copy = config.memalign(config.arena, name_len + 1, _Alignof(char));
+		memcpy(name_copy, config.file_ref->name, name_len + 1);
+		ufa->filename = name_copy;
 	} else if (ufa->filename == NULL) {
 		const char* base = config.suggested_name;
 		if (base == NULL) { base = ufa_web_get_default_name(ufa); }
