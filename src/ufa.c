@@ -56,6 +56,7 @@ ufa_first_extension(
 
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_iostream.h>
+#include <SDL3/SDL_stdinc.h>
 
 _Static_assert(sizeof(SDL_DialogFileFilter) == sizeof(ufa_filter_t), "SDL_DialogFileFilter has a different size");
 _Static_assert(offsetof(SDL_DialogFileFilter, name) == offsetof(ufa_filter_t, name), "SDL_DialogFileFilter.name has a different offset");
@@ -73,6 +74,16 @@ typedef struct {
 	SDL_IOStream* stream;
 	const char* mode;
 } ufa_t;
+
+// A ref is just the copied path.
+// C forbids a struct with only a flexible array member so the string is used
+// directly instead of being wrapped.
+static ufa_file_ref_t*
+ufa_ref_file(ufa_t* ufa) {
+	if (ufa->status != UFA_OK || ufa->filename == NULL) { return NULL; }
+
+	return (ufa_file_ref_t*)SDL_strdup(ufa->filename);
+}
 
 /**
  * Snapshot SDL_GetError into the arena.
@@ -152,7 +163,9 @@ ufa_begin_open_file(ufa_config_t config) {
 		.mode = "r",
 	};
 
-	if (config.filename != NULL) {
+	if (config.file_ref != NULL) {
+		ufa_open_file(ufa, ufa_file_ref_name(config.file_ref));
+	} else if (config.filename != NULL) {
 		ufa_open_file(ufa, config.filename);
 	} else {
 		SDL_ShowOpenFileDialog(
@@ -227,7 +240,9 @@ ufa_begin_save_file(ufa_config_t config) {
 		.mode = "w",
 	};
 
-	if (config.filename != NULL) {
+	if (config.file_ref != NULL) {
+		ufa_open_file(ufa, ufa_file_ref_name(config.file_ref));
+	} else if (config.filename != NULL) {
 		ufa_open_file(ufa, config.filename);
 	} else {
 		// SDL_ShowSaveFileDialog accepts a file path as default_location to
@@ -301,6 +316,30 @@ ufa_end_save_file(ufa_save_file_t* save_file) {
 
 // }}}
 
+// Ref {{{
+
+ufa_file_ref_t*
+ufa_ref_open_file(ufa_open_file_t* open_file) {
+	return ufa_ref_file((ufa_t*)open_file);
+}
+
+ufa_file_ref_t*
+ufa_ref_save_file(ufa_save_file_t* save_file) {
+	return ufa_ref_file((ufa_t*)save_file);
+}
+
+const char*
+ufa_file_ref_name(const ufa_file_ref_t* ref) {
+	return (const char*)ref;
+}
+
+void
+ufa_release_file_ref(ufa_file_ref_t* ref) {
+	SDL_free(ref);
+}
+
+// }}}
+
 #else
 
 // Common {{{
@@ -308,6 +347,7 @@ ufa_end_save_file(ufa_save_file_t* save_file) {
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <emscripten/em_macros.h>
 
@@ -320,6 +360,11 @@ typedef struct {
 	uint8_t status;
 	int handle;
 } ufa_t;
+
+struct ufa_file_ref_s {
+	int js_handle;
+	char name[];
+};
 
 EMSCRIPTEN_KEEPALIVE void*
 ufa_web_malloc(void* ctx, size_t size) {
@@ -377,6 +422,7 @@ ufa_web_build_accept(const ufa_config_t* config) {
 extern int
 ufa_web_begin_open_file(
 	const char* filter,
+	int file_ref,
 	void* alloc_ctx,
 	const char** filename_ptr,
 	uint8_t* status_ptr,
@@ -399,8 +445,11 @@ ufa_begin_open_file(ufa_config_t config) {
 		.status = UFA_PENDING,
 	};
 
+	// With a file_ref, JS reopens the referenced file without a dialog,
+	// reading its current content.
 	ufa->handle = ufa_web_begin_open_file(
 		ufa_web_build_accept(&config),
+		config.file_ref != NULL ? config.file_ref->js_handle : 0,
 		ufa,
 		&ufa->filename,
 		&ufa->status,
@@ -444,6 +493,7 @@ ufa_web_begin_save_file(
 	const char* filename,
 	const char* accept,
 	int show_dialog,
+	int file_ref,
 	void* alloc_ctx,
 	const char** filename_ptr,
 	uint8_t* status_ptr,
@@ -469,7 +519,9 @@ ufa_begin_save_file(ufa_config_t config) {
 		.filename = config.filename,
 	};
 
-	if (ufa->filename == NULL) {
+	if (config.file_ref != NULL) {
+		ufa->filename = config.file_ref->name;
+	} else if (ufa->filename == NULL) {
 		const char* base = config.suggested_name;
 		if (base == NULL) { base = ufa_web_get_default_name(ufa); }
 
@@ -488,6 +540,8 @@ ufa_begin_save_file(ufa_config_t config) {
 		ufa->filename = base;
 	}
 
+	// With a file_ref, JS writes back to the referenced file (asking for
+	// permission first), falling back to a download named after it.
 	// With an explicit filename, the dialog is bypassed and the save is always
 	// a plain download.
 	// Otherwise, JS will use the save dialog where the browser supports it,
@@ -497,7 +551,8 @@ ufa_begin_save_file(ufa_config_t config) {
 	ufa->handle = ufa_web_begin_save_file(
 		ufa->filename,
 		ufa_web_build_accept(&config),
-		config.filename == NULL,
+		config.file_ref == NULL && config.filename == NULL,
+		config.file_ref != NULL ? config.file_ref->js_handle : 0,
 		ufa,
 		&ufa->filename,
 		&ufa->status,
@@ -530,6 +585,57 @@ ufa_write_save_file(ufa_save_file_t* save_file, const void* buf, size_t* size) {
 void
 ufa_end_save_file(ufa_save_file_t* save_file) {
 	ufa_web_end_save_file(((ufa_t*)save_file)->handle);
+}
+
+// }}}
+
+// Ref {{{
+
+extern int
+ufa_web_ref_file(int handle);
+
+extern void
+ufa_web_release_file_ref(int ref);
+
+static ufa_file_ref_t*
+ufa_ref_file(ufa_t* ufa) {
+	if (ufa->status != UFA_OK || ufa->filename == NULL) { return NULL; }
+
+	int js_handle = ufa_web_ref_file(ufa->handle);
+	if (js_handle == 0) { return NULL; }
+
+	size_t name_len = strlen(ufa->filename);
+	ufa_file_ref_t* ref = malloc(sizeof(ufa_file_ref_t) + name_len + 1);
+	if (ref == NULL) {
+		ufa_web_release_file_ref(js_handle);
+		return NULL;
+	}
+
+	ref->js_handle = js_handle;
+	memcpy(ref->name, ufa->filename, name_len + 1);
+
+	return ref;
+}
+
+ufa_file_ref_t*
+ufa_ref_open_file(ufa_open_file_t* open_file) {
+	return ufa_ref_file((ufa_t*)open_file);
+}
+
+ufa_file_ref_t*
+ufa_ref_save_file(ufa_save_file_t* save_file) {
+	return ufa_ref_file((ufa_t*)save_file);
+}
+
+const char*
+ufa_file_ref_name(const ufa_file_ref_t* ref) {
+	return ref->name;
+}
+
+void
+ufa_release_file_ref(ufa_file_ref_t* ref) {
+	ufa_web_release_file_ref(ref->js_handle);
+	free(ref);
 }
 
 // }}}

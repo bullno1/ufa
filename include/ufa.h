@@ -20,10 +20,14 @@
  *   to disk.
  *   In other browsers, it falls back to triggering a file download.
  *
- * For the save dialog to be used, @ref ufa_begin_save_file must be called
- * during a user gesture (e.g: from a mouse or keyboard event handler) in a
- * secure context (https).
- * Otherwise, the download fallback is used.
+ * For the open and save dialogs to be used, @ref ufa_begin_open_file and
+ * @ref ufa_begin_save_file must be called during a user gesture (e.g: from a
+ * mouse or keyboard event handler) in a secure context (https).
+ * Otherwise, the fallbacks are used.
+ *
+ * For an editor workflow (open a file, then repeatedly save back to it
+ * without a dialog), retain a @ref ufa_file_ref_t from a completed action and
+ * save through @ref ufa_config_t::save_to.
  */
 
 #include <stddef.h>
@@ -52,6 +56,20 @@ typedef enum {
 typedef struct ufa_open_file_s ufa_open_file_t;
 
 typedef struct ufa_save_file_s ufa_save_file_t;
+
+/**
+ * A persistent reference to a previously opened or saved file.
+ *
+ * Unlike the open/save actions, a reference is not tied to the arena.
+ * It remains valid after the action has ended and the arena has been reset,
+ * until it is released with @ref ufa_release_file_ref.
+ *
+ * This enables an editor workflow: open (or save) a file once through a
+ * dialog, retain a reference with @ref ufa_ref_open_file or
+ * @ref ufa_ref_save_file, then reopen or save back to the same file without
+ * a dialog by setting @ref ufa_config_t::file_ref.
+ */
+typedef struct ufa_file_ref_s ufa_file_ref_t;
 
 typedef UFA_ARENA_TYPE ufa_arena_t;
 
@@ -142,6 +160,29 @@ typedef struct {
 	 * On the web, a name will be derived from the page title instead.
 	 */
 	const char* suggested_name;
+
+	/**
+	 * If set, act on this previously referenced file without a dialog.
+	 *
+	 * For @ref ufa_begin_save_file, save back to the referenced file.
+	 * On the web, if the browser does not support writing back to the file
+	 * or the user denies the permission, this falls back to a file download
+	 * named after the referenced file.
+	 *
+	 * For @ref ufa_begin_open_file, reopen the referenced file, reading its
+	 * current content.
+	 * This can be used to reload a file that has changed on disk.
+	 * On the web, this only works when the file was originally picked
+	 * through the File System Access API; if it was not, or if the user
+	 * denies the read permission, the action fails with @ref UFA_ERROR.
+	 *
+	 * This takes precedence over @ref ufa_config_t::filename.
+	 * The reference must remain valid until the action has ended.
+	 *
+	 * @see ufa_ref_open_file
+	 * @see ufa_ref_save_file
+	 */
+	ufa_file_ref_t* file_ref;
 } ufa_config_t;
 
 /**
@@ -299,5 +340,47 @@ ufa_write_save_file(ufa_save_file_t* save_file, const void* buf, size_t* size);
  */
 void
 ufa_end_save_file(ufa_save_file_t* save_file);
+
+/**
+ * Retain a persistent reference to the file of an open action.
+ *
+ * This should only be called when @ref ufa_check_open_file has returned
+ * @ref UFA_OK and before @ref ufa_end_open_file.
+ * In other situations, it returns `NULL`.
+ *
+ * @see ufa_file_ref_t
+ */
+ufa_file_ref_t*
+ufa_ref_open_file(ufa_open_file_t* open_file);
+
+/**
+ * Retain a persistent reference to the file of a save action.
+ *
+ * This should only be called when @ref ufa_check_save_file has returned
+ * @ref UFA_OK and before @ref ufa_end_save_file.
+ * In other situations, it returns `NULL`.
+ *
+ * @see ufa_file_ref_t
+ */
+ufa_file_ref_t*
+ufa_ref_save_file(ufa_save_file_t* save_file);
+
+/**
+ * Return the display name of a referenced file.
+ *
+ * This is the full path on native platforms and the file name on the web.
+ * The returned string remains valid until the reference is released.
+ */
+const char*
+ufa_file_ref_name(const ufa_file_ref_t* ref);
+
+/**
+ * Release a file reference.
+ *
+ * This must not be called while an action using the reference is still in
+ * progress.
+ */
+void
+ufa_release_file_ref(ufa_file_ref_t* ref);
 
 #endif

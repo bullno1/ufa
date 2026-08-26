@@ -4,6 +4,11 @@ addToLibrary({
 		const handles = new Map();
 		let nextHandle = 0;
 
+		// Refs outlive actions and are addressed separately.
+		// Ids start at 1 so that 0 can mean "no ref".
+		const refs = new Map();
+		let nextRef = 1;
+
 		function allocHandle(obj) {
 			const handle = nextHandle++;
 			handles.set(handle, obj);
@@ -35,20 +40,20 @@ addToLibrary({
 			setValue(obj.error_ptr, allocString(obj.alloc_ctx, String(e)), '*');
 		}
 
-		_ufa_web_begin_open_file = (filter, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
-			const input = document.createElement('input');
-			input.type = 'file';
+		_ufa_web_begin_open_file = (filter, file_ref, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
+			const accept = UTF8ToString(filter);
 
 			const obj = {
-				input,
 				alloc_ctx,
 				error_ptr,
+				fsHandle: null,
 				content: null,
 				pos: 0,
 			};
 
 			function openSuccess(file) {
 				obj.file = file;
+				obj.filename = file.name;
 
 				setValue(filename_ptr, allocString(alloc_ctx, file.name), '*');
 
@@ -62,24 +67,94 @@ addToLibrary({
 			}
 
 			function openFailure() {
-				setValue(status_ptr, UFA_CANCELLED);
+				setValue(status_ptr, UFA_CANCELLED, 'i8');
 			}
 
-			input.addEventListener("change", (event) => {
-				if (input.files.length === 1) {
-					openSuccess(input.files[0]);
-				} else {
+			function openWithInput() {
+				const input = document.createElement('input');
+				input.type = 'file';
+				obj.input = input;
+
+				input.addEventListener("change", (event) => {
+					if (input.files.length === 1) {
+						openSuccess(input.files[0]);
+					} else {
+						openFailure();
+					}
+				}, {once: true});
+
+				input.addEventListener("cancel", (event) => {
 					openFailure();
+				}, {once: true});
+
+				input.accept = accept;
+				input.click();
+			}
+
+			const ref = file_ref !== 0 ? refs.get(file_ref) : null;
+			if (ref) {
+				if (ref.fsHandle) {
+					Promise.resolve()
+						.then(() => ref.fsHandle.queryPermission({ mode: 'read' }))
+						.then((permission) => {
+							// Only prompt (which needs a user gesture) when the
+							// permission is not already granted
+							if (permission === 'granted') { return permission; }
+							return ref.fsHandle.requestPermission({ mode: 'read' });
+						})
+						.then((permission) => {
+							if (permission !== 'granted') {
+								throw new Error('Read permission was not granted');
+							}
+
+							// getFile returns a snapshot of the current
+							// on-disk content, so this also serves as a reload
+							return ref.fsHandle.getFile().then((file) => {
+								obj.fsHandle = ref.fsHandle;
+								openSuccess(file);
+							});
+						})
+						.catch((e) => {
+							reportError(obj, e);
+							setValue(status_ptr, UFA_ERROR, 'i8');
+						});
+				} else {
+					// The file was originally picked without the File System
+					// Access API; its content cannot be read again
+					reportError(obj, new Error('Reopening a file is not supported in this browser'));
+					setValue(status_ptr, UFA_ERROR, 'i8');
 				}
-			}, {once: true});
+			} else if (window.showOpenFilePicker) {
+				const options = { multiple: false };
+				if (accept !== '') {
+					options.types = [{
+						accept: { 'application/octet-stream': accept.split(',') },
+					}];
+				}
 
-			input.addEventListener("cancel", (event) => {
-				openFailure();
-			}, {once: true});
-
-			input.accept = UTF8ToString(filter);
-			console.log(input.accept);
-			input.click();
+				window.showOpenFilePicker(options).then(
+					([handle]) => {
+						// Keep the handle so a ref can write back to the file
+						obj.fsHandle = handle;
+						return handle.getFile().then(openSuccess).catch((e) => {
+							reportError(obj, e);
+							setValue(status_ptr, UFA_ERROR, 'i8');
+						});
+					},
+					(e) => {
+						if (e.name === 'AbortError') {
+							openFailure();
+						} else {
+							// e.g: SecurityError when called outside of a user
+							// gesture or in a cross-origin iframe
+							console.error(e);
+							openWithInput();
+						}
+					}
+				);
+			} else {
+				openWithInput();
+			}
 
 			return allocHandle(obj);
 		};
@@ -127,11 +202,12 @@ addToLibrary({
 			return allocString(alloc_ctx, name);
 		};
 
-		_ufa_web_begin_save_file = (filename, accept, show_dialog, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
+		_ufa_web_begin_save_file = (filename, accept, show_dialog, file_ref, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
 			const obj = {
 				filename: UTF8ToString(filename),
 				alloc_ctx,
 				error_ptr,
+				fsHandle: null,
 				mode: null,
 				chunks: [],
 				writable: null,
@@ -144,7 +220,39 @@ addToLibrary({
 				setValue(status_ptr, UFA_OK, 'i8');
 			}
 
-			if (show_dialog && window.showSaveFilePicker) {
+			function startWritable(fsHandle, writable) {
+				obj.mode = 'writable';
+				obj.fsHandle = fsHandle;
+				obj.writable = writable;
+				obj.pending = Promise.resolve();
+				setValue(status_ptr, UFA_OK, 'i8');
+			}
+
+			const ref = file_ref !== 0 ? refs.get(file_ref) : null;
+			if (ref) {
+				if (ref.fsHandle) {
+					Promise.resolve()
+						.then(() => ref.fsHandle.requestPermission({ mode: 'readwrite' }))
+						.then((permission) => {
+							if (permission !== 'granted') {
+								throw new Error('Write permission was not granted');
+							}
+							return ref.fsHandle.createWritable();
+						})
+						.then((writable) => {
+							startWritable(ref.fsHandle, writable);
+						})
+						.catch((e) => {
+							// Write-back is not possible; degrade to a download
+							// named after the file
+							console.error(e);
+							startDownload();
+						});
+				} else {
+					// The file was opened without the File System Access API
+					startDownload();
+				}
+			} else if (show_dialog && window.showSaveFilePicker) {
 				const options = { suggestedName: obj.filename };
 				const extensions = UTF8ToString(accept);
 				if (extensions !== '') {
@@ -155,15 +263,11 @@ addToLibrary({
 
 				window.showSaveFilePicker(options).then(
 					(handle) => handle.createWritable().then((writable) => {
-						obj.mode = 'picker';
-						obj.writable = writable;
-						obj.pending = Promise.resolve();
-
 						// Report the name the user actually chose
 						obj.filename = handle.name;
 						setValue(filename_ptr, allocString(alloc_ctx, handle.name), '*');
 
-						setValue(status_ptr, UFA_OK, 'i8');
+						startWritable(handle, writable);
 					}).catch((e) => {
 						reportError(obj, e);
 						setValue(status_ptr, UFA_ERROR, 'i8');
@@ -234,6 +338,22 @@ addToLibrary({
 				return UFA_ERROR;
 			}
 		};
+
+		_ufa_web_ref_file = (handle) => {
+			const obj = resolveHandle(handle);
+			if (!obj || !obj.filename) { return 0; }
+
+			const ref = nextRef++;
+			refs.set(ref, {
+				fsHandle: obj.fsHandle || null,
+				name: obj.filename,
+			});
+			return ref;
+		};
+
+		_ufa_web_release_file_ref = (ref) => {
+			refs.delete(ref);
+		};
 	},
 
 	ufa_web_begin_open_file: () => {},
@@ -256,4 +376,10 @@ addToLibrary({
 
 	ufa_web_write_save_file: () => {},
 	ufa_web_write_save_file__deps: ['$ufa_init'],
+
+	ufa_web_ref_file: () => {},
+	ufa_web_ref_file__deps: ['$ufa_init'],
+
+	ufa_web_release_file_ref: () => {},
+	ufa_web_release_file_ref__deps: ['$ufa_init'],
 });

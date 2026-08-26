@@ -34,7 +34,18 @@ typedef struct {
 		ufa_open_file_t* open_file;
 		ufa_save_file_t* save_file;
 	};
+
+	ufa_file_ref_t* file_ref;
 } app_t;
+
+static void
+app_retain_file_ref(app_t* app, ufa_file_ref_t* ref) {
+	if (ref == NULL) { return; }
+
+	if (app->file_ref != NULL) { ufa_release_file_ref(app->file_ref); }
+	app->file_ref = ref;
+	printf("Ref: %s\n", ufa_file_ref_name(ref));
+}
 
 SDL_AppResult
 SDL_AppInit(void** userdata, int argc, char* argv[]) {
@@ -49,7 +60,7 @@ SDL_AppInit(void** userdata, int argc, char* argv[]) {
 	static app_t app = { 0 };
 
 	app.window = SDL_CreateWindow(
-		"ufa example - O: open (dump to stdout), S: save",
+		"ufa example - O: open (dump to stdout), R: reload, S: save (back)",
 		640, 200,
 		0
 	);
@@ -133,9 +144,18 @@ SDL_AppEvent(void* userdata, SDL_Event* event) {
 			if (event->key.key == SDLK_O) {
 				app->action = APP_OPENING;
 				app->open_file = ufa_begin_open_file(app_make_ufa_config(app));
+			} else if (event->key.key == SDLK_R && app->file_ref != NULL) {
+				app->action = APP_OPENING;
+				ufa_config_t config = app_make_ufa_config(app);
+				// Reload the previously opened/saved file
+				config.file_ref = app->file_ref;
+				app->open_file = ufa_begin_open_file(config);
 			} else if (event->key.key == SDLK_S) {
 				app->action = APP_SAVING;
-				app->save_file = ufa_begin_save_file(app_make_ufa_config(app));
+				ufa_config_t config = app_make_ufa_config(app);
+				// Save back to the previously opened/saved file, if any
+				config.file_ref = app->file_ref;
+				app->save_file = ufa_begin_save_file(config);
 			}
 			break;
 	}
@@ -156,6 +176,7 @@ SDL_AppIterate(void* userdata) {
 					break;
 				case UFA_OK:
 					app_dump_open_file(app);
+					app_retain_file_ref(app, ufa_ref_open_file(app->open_file));
 					ufa_end_open_file(app->open_file);
 					app_finish_action(app);
 					break;
@@ -177,6 +198,9 @@ SDL_AppIterate(void* userdata) {
 					break;
 				case UFA_OK:
 					app_write_save_file(app);
+					if (app->file_ref == NULL) {
+						app_retain_file_ref(app, ufa_ref_save_file(app->save_file));
+					}
 					ufa_end_save_file(app->save_file);
 					app_finish_action(app);
 					break;
@@ -203,6 +227,7 @@ SDL_AppQuit(void* userdata, SDL_AppResult result) {
 	app_t* app = userdata;
 	if (app == NULL) { return; }
 
+	if (app->file_ref != NULL) { ufa_release_file_ref(app->file_ref); }
 	SDL_DestroyWindow(app->window);
 	barena_pool_cleanup(&app->pool);
 }
