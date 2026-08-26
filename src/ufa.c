@@ -633,6 +633,8 @@ ufa_file_ref_name(const ufa_file_ref_t* ref) {
 
 void
 ufa_release_file_ref(ufa_file_ref_t* ref) {
+	if (ref == NULL) { return; }
+
 	ufa_web_release_file_ref(ref->js_handle);
 	free(ref);
 }
