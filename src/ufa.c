@@ -33,15 +33,15 @@ ufa_first_extension(
 	int num_filters,
 	int filter_index
 ) {
-	if (filters == NULL || num_filters <= 0) { return NULL; }
-	if (filter_index < 0 || filter_index >= num_filters) { filter_index = 0; }
+	// Filters are optional
+	if (num_filters <= 0) { return NULL; }
+	// SDL passes -1 when the platform does not report the chosen filter
+	if (filter_index < 0) { filter_index = 0; }
 
 	const char* pattern = filters[filter_index].pattern;
-	if (pattern == NULL || strcmp(pattern, "*") == 0) { return NULL; }
+	if (strcmp(pattern, "*") == 0) { return NULL; }
 
 	size_t len = strcspn(pattern, ";");
-	if (len == 0) { return NULL; }
-
 	char* extension = memalign(arena, len + 1, _Alignof(char));
 	memcpy(extension, pattern, len);
 	extension[len] = '\0';
@@ -385,8 +385,7 @@ ufa_web_build_accept(const ufa_config_t* config) {
 	// Worst case per pattern: every token gains a ",." prefix
 	size_t cap = 1;
 	for (int i = 0; i < config->num_filters; ++i) {
-		const char* pattern = config->filters[i].pattern;
-		if (pattern != NULL) { cap += strlen(pattern) * 2 + 2; }
+		cap += strlen(config->filters[i].pattern) * 2 + 2;
 	}
 
 	char* accept = config->memalign(config->arena, cap, _Alignof(char));
@@ -394,11 +393,11 @@ ufa_web_build_accept(const ufa_config_t* config) {
 	bool is_first = true;
 	for (int i = 0; i < config->num_filters; ++i) {
 		const char* pattern = config->filters[i].pattern;
-		if (pattern == NULL) { continue; }
+		if (strcmp(pattern, "*") == 0) { continue; }
 
 		while (*pattern != '\0') {
 			size_t len = strcspn(pattern, ";");
-			if (len > 0 && !(len == 1 && pattern[0] == '*')) {
+			if (len > 0) {
 				if (!is_first) { *itr++ = ','; }
 				*itr++ = '.';
 				memcpy(itr, pattern, len);
