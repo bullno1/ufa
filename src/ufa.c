@@ -169,7 +169,7 @@ ufa_begin_open_file(ufa_config_t config) {
 		ufa_open_file(ufa, config.filename);
 	} else {
 		SDL_ShowOpenFileDialog(
-			ufa_file_callback, ufa,
+			UFA_FN_WRAPPER(ufa_file_callback), ufa,
 			config.parent_window,
 			(const SDL_DialogFileFilter*)config.filters,
 			config.num_filters,
@@ -260,7 +260,7 @@ ufa_begin_save_file(ufa_config_t config) {
 		}
 
 		SDL_ShowSaveFileDialog(
-			ufa_file_callback, ufa,
+			UFA_FN_WRAPPER(ufa_file_callback), ufa,
 			config.parent_window,
 			(const SDL_DialogFileFilter*)config.filters,
 			config.num_filters,

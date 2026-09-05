@@ -37,6 +37,21 @@
 #endif
 
 /**
+ *  Customizable function wrapper
+ *
+ *  It should return a function of the same type.
+ *  By default, this is an identity macro (returning the same function).
+ *
+ *  UFA uses this to wrap its internal callback functions.
+ *
+ *  Something like [bsfn](https://github.com/bullno1/libs/blob/master/bsfn.h) could be used.
+ *  This allows reloading in the middle of waiting for a dialog action.
+ */
+#ifndef UFA_FN_WRAPPER
+#	define UFA_FN_WRAPPER(FN) FN
+#endif
+
+/**
  * The file action status
  */
 typedef enum {
