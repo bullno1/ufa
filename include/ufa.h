@@ -51,6 +51,10 @@
 #	define UFA_FN_WRAPPER(FN) FN
 #endif
 
+#ifdef UFA_FN_WRAPPER_INCLUDE
+#	include UFA_FN_WRAPPER_INCLUDE
+#endif
+
 /**
  * The file action status
  */
