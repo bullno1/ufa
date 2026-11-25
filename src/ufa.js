@@ -163,6 +163,12 @@ addToLibrary({
 			closeHandle(handle);
 		};
 
+		_ufa_web_get_open_file_size = (handle) => {
+			const file = resolveHandle(handle);
+			// The content is only there once the action is UFA_OK
+			return file && file.content ? file.content.byteLength : 0;
+		};
+
 		_ufa_web_read_open_file = (handle, buf, size_ptr) => {
 			const file = resolveHandle(handle);
 			try {
@@ -361,6 +367,9 @@ addToLibrary({
 
 	ufa_web_end_open_file: () => {},
 	ufa_web_end_open_file__deps: ['$ufa_init'],
+
+	ufa_web_get_open_file_size: () => {},
+	ufa_web_get_open_file_size__deps: ['$ufa_init'],
 
 	ufa_web_read_open_file: () => {},
 	ufa_web_read_open_file__deps: ['$ufa_init'],

@@ -247,6 +247,17 @@ const char*
 ufa_get_open_file_name(ufa_open_file_t* open_file);
 
 /**
+ * Return the size of the opened file in bytes.
+ *
+ * This would return 0 if @ref ufa_check_open_file returns anything other
+ * than @ref UFA_OK or if the size can not be determined.
+ * In the later case, the reason can be retrieved with
+ * @ref ufa_get_open_file_error.
+ */
+size_t
+ufa_get_open_file_size(ufa_open_file_t* open_file);
+
+/**
  * Read the content of an opened file.
  *
  * This generally behaves like `fread`.

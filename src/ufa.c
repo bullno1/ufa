@@ -196,6 +196,20 @@ ufa_get_open_file_name(ufa_open_file_t* open_file) {
 	return ((ufa_t*)open_file)->filename;
 }
 
+size_t
+ufa_get_open_file_size(ufa_open_file_t* open_file) {
+	ufa_t* ufa = (ufa_t*)open_file;
+	if (ufa->stream == NULL) { return 0; }
+
+	Sint64 size = SDL_GetIOSize(ufa->stream);
+	if (size < 0) {
+		ufa_set_error(ufa);
+		return 0;
+	}
+
+	return (size_t)size;
+}
+
 ufa_status_t
 ufa_read_open_file(ufa_open_file_t* open_file, void* buf, size_t* size) {
 	ufa_t* ufa = (ufa_t*)open_file;
@@ -431,6 +445,9 @@ ufa_web_begin_open_file(
 extern void
 ufa_web_end_open_file(int handle);
 
+extern size_t
+ufa_web_get_open_file_size(int handle);
+
 extern int
 ufa_web_read_open_file(int handle, void* buf, size_t* size);
 
@@ -471,6 +488,11 @@ ufa_get_open_file_error(ufa_open_file_t* open_file) {
 const char*
 ufa_get_open_file_name(ufa_open_file_t* open_file) {
 	return ((ufa_t*)open_file)->filename;
+}
+
+size_t
+ufa_get_open_file_size(ufa_open_file_t* open_file) {
+	return ufa_web_get_open_file_size(((ufa_t*)open_file)->handle);
 }
 
 ufa_status_t
