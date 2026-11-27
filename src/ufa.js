@@ -40,30 +40,66 @@ addToLibrary({
 			setValue(obj.error_ptr, allocString(obj.alloc_ctx, String(e)), '*');
 		}
 
-		_ufa_web_begin_open_file = (filter, file_ref, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
+		// Make one of the chosen files the current file and load its content.
+		// Only the content of the current file is kept in memory.
+		function selectOpenFile(obj, index) {
+			const entry = obj.files[index];
+			// A newer selection or the end of the action supersedes this load
+			const loadId = ++obj.loadId;
+
+			// ufa_web_ref_file refers to the current file through these
+			obj.fsHandle = entry.fsHandle;
+			obj.filename = entry.file.name;
+			obj.content = null;
+			obj.pos = 0;
+
+			setValue(obj.filename_ptr, entry.name_ptr, '*');
+			setValue(obj.error_ptr, 0, '*');
+			setValue(obj.status_ptr, UFA_PENDING, 'i8');
+
+			entry.file.arrayBuffer().then((buf) => {
+				if (obj.loadId !== loadId) { return; }
+
+				obj.content = new Uint8Array(buf);
+				setValue(obj.status_ptr, UFA_OK, 'i8');
+			}).catch((e) => {
+				if (obj.loadId !== loadId) { return; }
+
+				reportError(obj, e);
+				setValue(obj.status_ptr, UFA_ERROR, 'i8');
+			});
+		}
+
+		_ufa_web_begin_open_file = (filter, allow_multiple, file_ref, alloc_ctx, filename_ptr, status_ptr, error_ptr) => {
 			const accept = UTF8ToString(filter);
+			const multiple = allow_multiple !== 0;
 
 			const obj = {
 				alloc_ctx,
+				filename_ptr,
+				status_ptr,
 				error_ptr,
+				// All the chosen files: { file, fsHandle, name_ptr }
+				files: [],
+				loadId: 0,
+				// The current file
 				fsHandle: null,
+				filename: null,
 				content: null,
 				pos: 0,
 			};
 
-			function openSuccess(file) {
-				obj.file = file;
-				obj.filename = file.name;
+			// entries is a list of { file, fsHandle }.
+			// fsHandle is null when the file was picked without the File System
+			// Access API.
+			function openSuccess(entries) {
+				obj.files = entries.map(({ file, fsHandle }) => ({
+					file,
+					fsHandle,
+					name_ptr: allocString(alloc_ctx, file.name),
+				}));
 
-				setValue(filename_ptr, allocString(alloc_ctx, file.name), '*');
-
-				file.arrayBuffer().then((buf) => {
-					obj.content = new Uint8Array(buf);
-					setValue(status_ptr, UFA_OK, 'i8');
-				}).catch((e) => {
-					reportError(obj, e);
-					setValue(status_ptr, UFA_ERROR, 'i8');
-				})
+				selectOpenFile(obj, 0);
 			}
 
 			function openFailure() {
@@ -76,8 +112,11 @@ addToLibrary({
 				obj.input = input;
 
 				input.addEventListener("change", (event) => {
-					if (input.files.length === 1) {
-						openSuccess(input.files[0]);
+					if (input.files.length >= 1) {
+						openSuccess(Array.from(
+							input.files,
+							(file) => ({ file, fsHandle: null })
+						));
 					} else {
 						openFailure();
 					}
@@ -88,6 +127,7 @@ addToLibrary({
 				}, {once: true});
 
 				input.accept = accept;
+				input.multiple = multiple;
 				input.click();
 			}
 
@@ -110,8 +150,7 @@ addToLibrary({
 							// getFile returns a snapshot of the current
 							// on-disk content, so this also serves as a reload
 							return ref.fsHandle.getFile().then((file) => {
-								obj.fsHandle = ref.fsHandle;
-								openSuccess(file);
+								openSuccess([{ file, fsHandle: ref.fsHandle }]);
 							});
 						})
 						.catch((e) => {
@@ -125,7 +164,7 @@ addToLibrary({
 					setValue(status_ptr, UFA_ERROR, 'i8');
 				}
 			} else if (window.showOpenFilePicker) {
-				const options = { multiple: false };
+				const options = { multiple };
 				if (accept !== '') {
 					options.types = [{
 						accept: { 'application/octet-stream': accept.split(',') },
@@ -133,10 +172,11 @@ addToLibrary({
 				}
 
 				window.showOpenFilePicker(options).then(
-					([handle]) => {
-						// Keep the handle so a ref can write back to the file
-						obj.fsHandle = handle;
-						return handle.getFile().then(openSuccess).catch((e) => {
+					(fsHandles) => {
+						// Keep the handles so a ref can write back to the file
+						return Promise.all(fsHandles.map(
+							(fsHandle) => fsHandle.getFile().then((file) => ({ file, fsHandle }))
+						)).then(openSuccess).catch((e) => {
 							reportError(obj, e);
 							setValue(status_ptr, UFA_ERROR, 'i8');
 						});
@@ -160,7 +200,41 @@ addToLibrary({
 		};
 
 		_ufa_web_end_open_file = (handle) => {
+			const file = resolveHandle(handle);
+			// Drop any load still in flight
+			if (file) { file.loadId++; }
+
 			closeHandle(handle);
+		};
+
+		_ufa_web_get_open_file_count = (handle) => {
+			const file = resolveHandle(handle);
+			return file ? file.files.length : 0;
+		};
+
+		_ufa_web_get_open_file_name_at = (handle, index) => {
+			const file = resolveHandle(handle);
+			if (!file || index < 0 || index >= file.files.length) { return 0; }
+
+			return file.files[index].name_ptr;
+		};
+
+		_ufa_web_select_open_file = (handle, index) => {
+			const file = resolveHandle(handle);
+			if (!file) { return UFA_ERROR; }
+
+			if (index < 0 || index >= file.files.length) {
+				// The current file is left as is
+				setValue(
+					file.error_ptr,
+					allocString(file.alloc_ctx, 'The file index is out of range'),
+					'*'
+				);
+				return UFA_ERROR;
+			}
+
+			selectOpenFile(file, index);
+			return UFA_PENDING;
 		};
 
 		_ufa_web_get_open_file_size = (handle) => {
@@ -367,6 +441,15 @@ addToLibrary({
 
 	ufa_web_end_open_file: () => {},
 	ufa_web_end_open_file__deps: ['$ufa_init'],
+
+	ufa_web_get_open_file_count: () => {},
+	ufa_web_get_open_file_count__deps: ['$ufa_init'],
+
+	ufa_web_get_open_file_name_at: () => {},
+	ufa_web_get_open_file_name_at__deps: ['$ufa_init'],
+
+	ufa_web_select_open_file: () => {},
+	ufa_web_select_open_file__deps: ['$ufa_init'],
 
 	ufa_web_get_open_file_size: () => {},
 	ufa_web_get_open_file_size__deps: ['$ufa_init'],

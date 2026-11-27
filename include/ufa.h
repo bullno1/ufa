@@ -31,6 +31,7 @@
  */
 
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifndef UFA_ARENA_TYPE
 #	define UFA_ARENA_TYPE void
@@ -202,6 +203,18 @@ typedef struct {
 	 * @see ufa_ref_save_file
 	 */
 	ufa_file_ref_t* file_ref;
+
+	/**
+	 * Let the user choose more than one file in @ref ufa_begin_open_file.
+	 *
+	 * Use @ref ufa_get_open_file_count and @ref ufa_select_open_file to
+	 * iterate through them.
+	 *
+	 * This is ignored by @ref ufa_begin_save_file and when the dialog is
+	 * bypassed with @ref ufa_config_t::filename or
+	 * @ref ufa_config_t::file_ref.
+	 */
+	bool allow_multiple;
 } ufa_config_t;
 
 /**
@@ -223,6 +236,9 @@ ufa_begin_open_file(ufa_config_t config);
 
 /**
  * Check the status of an open file action
+ *
+ * When several files were chosen (@ref ufa_config_t::allow_multiple), the
+ * status is that of the current file.
  */
 ufa_status_t
 ufa_check_open_file(ufa_open_file_t* open_file);
@@ -240,11 +256,67 @@ ufa_get_open_file_error(ufa_open_file_t* open_file);
 /**
  * Return the name of the opened file.
  *
+ * When several files were chosen, this is the name of the current file.
+ *
  * This would return `NULL` if @ref ufa_check_open_file returns anything other
  * than @ref UFA_OK
  */
 const char*
 ufa_get_open_file_name(ufa_open_file_t* open_file);
+
+/**
+ * Return the number of files the user has chosen.
+ *
+ * This is 0 until the user has made a choice and stays 0 if the dialog was
+ * cancelled or failed.
+ *
+ * @see ufa_select_open_file
+ * @see ufa_get_open_file_name_at
+ */
+int
+ufa_get_open_file_count(ufa_open_file_t* open_file);
+
+/**
+ * Return the name of one of the chosen files without selecting it.
+ *
+ * It can be used to list the chosen files up front.
+ *
+ * @param open_file The file returned by @ref ufa_begin_open_file
+ * @param index Index of the file, from 0 to @ref ufa_get_open_file_count - 1
+ * @return The name or `NULL` if the index is out of range.
+ *   The returned string remains valid until the arena is reset.
+ */
+const char*
+ufa_get_open_file_name_at(ufa_open_file_t* open_file, int index);
+
+/**
+ * Make one of the chosen files the current file.
+ *
+ * This is needed when @ref ufa_config_t::allow_multiple is `true`.
+ *
+ * Once the user has made a choice, the first file (index 0) is already
+ * selected.
+ *
+ * Selecting a file always starts reading it from the beginning.
+ *
+ * This may return @ref UFA_PENDING.
+ * In that case, poll @ref ufa_check_open_file until it returns something else,
+ * just like after @ref ufa_begin_open_file.
+ *
+ * If the file can not be opened, the status becomes @ref UFA_ERROR but the
+ * action remains usable: another file can still be selected.
+ *
+ * @param open_file The file returned by @ref ufa_begin_open_file
+ * @param index Index of the file, from 0 to @ref ufa_get_open_file_count - 1
+ * @return Status of the newly selected file.
+ *   If the index is out of range, @ref UFA_ERROR is returned and the current
+ *   file is left unchanged.
+ *
+ * @remark Only one file is kept open at a time.
+ *   Selecting a file closes the previous one.
+ */
+ufa_status_t
+ufa_select_open_file(ufa_open_file_t* open_file, int index);
 
 /**
  * Return the size of the opened file in bytes.
@@ -373,6 +445,8 @@ ufa_end_save_file(ufa_save_file_t* save_file);
 
 /**
  * Retain a persistent reference to the file of an open action.
+ *
+ * When several files were chosen, this references the current file.
  *
  * This should only be called when @ref ufa_check_open_file has returned
  * @ref UFA_OK and before @ref ufa_end_open_file.

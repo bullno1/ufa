@@ -68,6 +68,10 @@ typedef struct {
 
 	const ufa_filter_t* filters;
 	int num_filters;
+	// All the chosen files, copied into the arena
+	const char* const* filenames;
+	int num_files;
+	// The current file, one of `filenames`
 	const char* filename;
 	const char* error;
 	ufa_status_t status;
@@ -85,6 +89,14 @@ ufa_ref_file(ufa_t* ufa) {
 	return (ufa_file_ref_t*)SDL_strdup(ufa->filename);
 }
 
+static const char*
+ufa_strdup(ufa_t* ufa, const char* str) {
+	size_t len = strlen(str);
+	char* copy = ufa->memalign(ufa->arena, len + 1, _Alignof(char));
+	memcpy(copy, str, len + 1);
+	return copy;
+}
+
 /**
  * Snapshot SDL_GetError into the arena.
  *
@@ -93,27 +105,41 @@ ufa_ref_file(ufa_t* ufa) {
  */
 static void
 ufa_set_error(ufa_t* ufa) {
-	const char* error = SDL_GetError();
-	size_t len = strlen(error);
-	char* copy = ufa->memalign(ufa->arena, len + 1, _Alignof(char));
-	memcpy(copy, error, len + 1);
-	ufa->error = copy;
+	ufa->error = ufa_strdup(ufa, SDL_GetError());
 }
 
 static void
-ufa_open_file(ufa_t* ufa, const char* filename) {
-	size_t len = strlen(filename);
-	char* filename_copy = ufa->memalign(ufa->arena, len + 1, _Alignof(char));
-	memcpy(filename_copy, filename, len + 1);
-	ufa->filename = filename_copy;
+ufa_open_file(ufa_t* ufa, int index) {
+	if (ufa->stream != NULL) {
+		SDL_CloseIO(ufa->stream);
+		ufa->stream = NULL;
+	}
 
-	ufa->stream = SDL_IOFromFile(filename, ufa->mode);
+	ufa->filename = ufa->filenames[index];
+	ufa->error = NULL;
+	ufa->stream = SDL_IOFromFile(ufa->filename, ufa->mode);
 	if (ufa->stream != NULL) {
 		ufa->status = UFA_OK;
 	} else {
 		ufa_set_error(ufa);
 		ufa->status = UFA_ERROR;
 	}
+}
+
+static void
+ufa_set_files(ufa_t* ufa, const char* const* filelist, int num_files) {
+	const char** filenames = ufa->memalign(
+		ufa->arena,
+		sizeof(const char*) * (size_t)num_files,
+		_Alignof(const char*)
+	);
+	for (int i = 0; i < num_files; ++i) {
+		filenames[i] = ufa_strdup(ufa, filelist[i]);
+	}
+	ufa->filenames = filenames;
+	ufa->num_files = num_files;
+
+	ufa_open_file(ufa, 0);
 }
 
 static void SDLCALL
@@ -125,25 +151,26 @@ ufa_file_callback(void* userdata, const char* const* filelist, int filter) {
 		ufa->status = UFA_ERROR;
 	} else if (*filelist == NULL) {
 		ufa->status = UFA_CANCELLED;
-	} else {
+	} else if (ufa->mode[0] == 'w') {
 		const char* filename = *filelist;
 		const char* extension = ufa_first_extension(
 			ufa->memalign, ufa->arena,
 			ufa->filters, ufa->num_filters,
 			filter
 		);
-		if (
-			ufa->mode[0] == 'w'
-			&& extension != NULL
-			&& !ufa_str_ends_with(filename, extension)
-		) {
+		if (extension != NULL && !ufa_str_ends_with(filename, extension)) {
 			size_t name_buf_len = strlen(filename) + strlen(extension) + 2;
 			char* name_buf = ufa->memalign(ufa->arena, name_buf_len, _Alignof(char));
 			snprintf(name_buf, name_buf_len, "%s.%s", filename, extension);
 			filename = name_buf;
 		}
 
-		ufa_open_file(ufa, filename);
+		ufa_set_files(ufa, &filename, 1);
+	} else {
+		int num_files = 0;
+		while (filelist[num_files] != NULL) { ++num_files; }
+
+		ufa_set_files(ufa, filelist, num_files);
 	}
 }
 
@@ -164,9 +191,10 @@ ufa_begin_open_file(ufa_config_t config) {
 	};
 
 	if (config.file_ref != NULL) {
-		ufa_open_file(ufa, ufa_file_ref_name(config.file_ref));
+		const char* filename = ufa_file_ref_name(config.file_ref);
+		ufa_set_files(ufa, &filename, 1);
 	} else if (config.filename != NULL) {
-		ufa_open_file(ufa, config.filename);
+		ufa_set_files(ufa, &config.filename, 1);
 	} else {
 		SDL_ShowOpenFileDialog(
 			UFA_FN_WRAPPER(ufa_file_callback), ufa,
@@ -174,7 +202,7 @@ ufa_begin_open_file(ufa_config_t config) {
 			(const SDL_DialogFileFilter*)config.filters,
 			config.num_filters,
 			config.directory,
-			false
+			config.allow_multiple
 		);
 	}
 
@@ -194,6 +222,31 @@ ufa_get_open_file_error(ufa_open_file_t* open_file) {
 const char*
 ufa_get_open_file_name(ufa_open_file_t* open_file) {
 	return ((ufa_t*)open_file)->filename;
+}
+
+int
+ufa_get_open_file_count(ufa_open_file_t* open_file) {
+	return ((ufa_t*)open_file)->num_files;
+}
+
+const char*
+ufa_get_open_file_name_at(ufa_open_file_t* open_file, int index) {
+	ufa_t* ufa = (ufa_t*)open_file;
+	if (index < 0 || index >= ufa->num_files) { return NULL; }
+
+	return ufa->filenames[index];
+}
+
+ufa_status_t
+ufa_select_open_file(ufa_open_file_t* open_file, int index) {
+	ufa_t* ufa = (ufa_t*)open_file;
+	if (index < 0 || index >= ufa->num_files) {
+		ufa->error = "The file index is out of range";
+		return UFA_ERROR;
+	}
+
+	ufa_open_file(ufa, index);
+	return ufa->status;
 }
 
 size_t
@@ -255,9 +308,10 @@ ufa_begin_save_file(ufa_config_t config) {
 	};
 
 	if (config.file_ref != NULL) {
-		ufa_open_file(ufa, ufa_file_ref_name(config.file_ref));
+		const char* filename = ufa_file_ref_name(config.file_ref);
+		ufa_set_files(ufa, &filename, 1);
 	} else if (config.filename != NULL) {
-		ufa_open_file(ufa, config.filename);
+		ufa_set_files(ufa, &config.filename, 1);
 	} else {
 		// SDL_ShowSaveFileDialog accepts a file path as default_location to
 		// prefill the name, not just a folder
@@ -435,6 +489,7 @@ ufa_web_build_accept(const ufa_config_t* config) {
 extern int
 ufa_web_begin_open_file(
 	const char* filter,
+	int allow_multiple,
 	int file_ref,
 	void* alloc_ctx,
 	const char** filename_ptr,
@@ -444,6 +499,15 @@ ufa_web_begin_open_file(
 
 extern void
 ufa_web_end_open_file(int handle);
+
+extern int
+ufa_web_get_open_file_count(int handle);
+
+extern const char*
+ufa_web_get_open_file_name_at(int handle, int index);
+
+extern int
+ufa_web_select_open_file(int handle, int index);
 
 extern size_t
 ufa_web_get_open_file_size(int handle);
@@ -465,6 +529,7 @@ ufa_begin_open_file(ufa_config_t config) {
 	// reading its current content.
 	ufa->handle = ufa_web_begin_open_file(
 		ufa_web_build_accept(&config),
+		config.allow_multiple,
 		config.file_ref != NULL ? config.file_ref->js_handle : 0,
 		ufa,
 		&ufa->filename,
@@ -488,6 +553,21 @@ ufa_get_open_file_error(ufa_open_file_t* open_file) {
 const char*
 ufa_get_open_file_name(ufa_open_file_t* open_file) {
 	return ((ufa_t*)open_file)->filename;
+}
+
+int
+ufa_get_open_file_count(ufa_open_file_t* open_file) {
+	return ufa_web_get_open_file_count(((ufa_t*)open_file)->handle);
+}
+
+const char*
+ufa_get_open_file_name_at(ufa_open_file_t* open_file, int index) {
+	return ufa_web_get_open_file_name_at(((ufa_t*)open_file)->handle, index);
+}
+
+ufa_status_t
+ufa_select_open_file(ufa_open_file_t* open_file, int index) {
+	return ufa_web_select_open_file(((ufa_t*)open_file)->handle, index);
 }
 
 size_t

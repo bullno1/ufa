@@ -34,6 +34,8 @@ typedef struct {
 		ufa_open_file_t* open_file;
 		ufa_save_file_t* save_file;
 	};
+	// Which of the chosen files is being read
+	int file_index;
 
 	ufa_file_ref_t* file_ref;
 } app_t;
@@ -60,7 +62,7 @@ SDL_AppInit(void** userdata, int argc, char* argv[]) {
 	static app_t app = { 0 };
 
 	app.window = SDL_CreateWindow(
-		"ufa example - O: open (dump to stdout), R: reload, S: save (back)",
+		"ufa example - O: open (dump to stdout), M: open many, R: reload, S: save (back)",
 		640, 200,
 		0
 	);
@@ -92,12 +94,45 @@ app_make_ufa_config(app_t* app) {
 static void
 app_finish_action(app_t* app) {
 	app->action = APP_IDLE;
+	app->file_index = 0;
 	barena_reset(&app->arena);
+}
+
+/**
+ * Move on to the next chosen file or finish the action if there is none left.
+ *
+ * Selecting a file may take a while (UFA_PENDING) so its result is picked up
+ * by the same ufa_check_open_file polling as the dialog.
+ */
+static void
+app_next_open_file(app_t* app) {
+	int next_index = app->file_index + 1;
+	if (next_index < ufa_get_open_file_count(app->open_file)) {
+		app->file_index = next_index;
+		ufa_select_open_file(app->open_file, next_index);
+	} else {
+		ufa_end_open_file(app->open_file);
+		app_finish_action(app);
+	}
 }
 
 static void
 app_dump_open_file(app_t* app) {
-	printf("Opened: %s\n", ufa_get_open_file_name(app->open_file));
+	int num_files = ufa_get_open_file_count(app->open_file);
+	// The names are available up front, before the files are read
+	if (app->file_index == 0 && num_files > 1) {
+		printf("Chosen %d files:\n", num_files);
+		for (int i = 0; i < num_files; ++i) {
+			printf("  %s\n", ufa_get_open_file_name_at(app->open_file, i));
+		}
+	}
+
+	printf(
+		"Opened (%d/%d): %s (%zu bytes)\n",
+		app->file_index + 1, num_files,
+		ufa_get_open_file_name(app->open_file),
+		ufa_get_open_file_size(app->open_file)
+	);
 
 	char buf[4096];
 	while (true) {
@@ -144,6 +179,11 @@ SDL_AppEvent(void* userdata, SDL_Event* event) {
 			if (event->key.key == SDLK_O) {
 				app->action = APP_OPENING;
 				app->open_file = ufa_begin_open_file(app_make_ufa_config(app));
+			} else if (event->key.key == SDLK_M) {
+				app->action = APP_OPENING;
+				ufa_config_t config = app_make_ufa_config(app);
+				config.allow_multiple = true;
+				app->open_file = ufa_begin_open_file(config);
 			} else if (event->key.key == SDLK_R && app->file_ref != NULL) {
 				app->action = APP_OPENING;
 				ufa_config_t config = app_make_ufa_config(app);
@@ -177,8 +217,7 @@ SDL_AppIterate(void* userdata) {
 				case UFA_OK:
 					app_dump_open_file(app);
 					app_retain_file_ref(app, ufa_ref_open_file(app->open_file));
-					ufa_end_open_file(app->open_file);
-					app_finish_action(app);
+					app_next_open_file(app);
 					break;
 				case UFA_CANCELLED:
 					printf("Open cancelled\n");
@@ -186,9 +225,9 @@ SDL_AppIterate(void* userdata) {
 					app_finish_action(app);
 					break;
 				case UFA_ERROR:
+					// With several files, this only concerns the current one
 					fprintf(stderr, "Open error: %s\n", ufa_get_open_file_error(app->open_file));
-					ufa_end_open_file(app->open_file);
-					app_finish_action(app);
+					app_next_open_file(app);
 					break;
 			}
 			break;
